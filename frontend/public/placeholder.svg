@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="600" viewBox="0 0 800 600" fill="none">
+  <rect width="800" height="600" fill="#F5E7D5"/>
+  <rect x="60" y="60" width="680" height="480" rx="32" fill="#FFF6EC" stroke="#D9C7B3" stroke-width="6"/>
+  <path d="M250 235L400 170L550 235V430H250V235Z" fill="#E8D4BD" stroke="#BEA78D" stroke-width="6"/>
+  <path d="M360 170C360 145.147 380.147 125 405 125C429.853 125 450 145.147 450 170" stroke="#BEA78D" stroke-width="8"/>
+  <text x="400" y="500" text-anchor="middle" fill="#7A6653" font-size="36" font-family="Verdana">Online Clothes Store</text>
+</svg>
