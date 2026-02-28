@@ -57,6 +57,7 @@ npm run dev
 ![Page 5](screenshots/5.png)
 ![Page 6](screenshots/6.png)
 
+
 ## Customer View
 
 ![Page 7](screenshots/7.png)
@@ -64,6 +65,7 @@ npm run dev
 ![Page 9](screenshots/9.png)
 ![Page 10](screenshots/10.png)
 ![Page 11](screenshots/11.png)
+
 
 ## Admin View
 
