@@ -30,6 +30,7 @@ async function addToCart(req, res, next) {
   try {
     const productId = Number(req.body.productId);
     const quantity = Number(req.body.quantity);
+    const size = String(req.body.size || '').trim();
     const product = await Product.findById(productId);
     if (!product || !product.is_active) {
       return res.status(404).json({
@@ -39,7 +40,7 @@ async function addToCart(req, res, next) {
     }
 
     const cart = await Cart.getOrCreateCart(req.user.id);
-    const existing = await Cart.findCartItem(cart.id, productId);
+    const existing = await Cart.findCartItem(cart.id, productId, size);
     const nextQuantity = existing ? Number(existing.quantity) + quantity : quantity;
 
     if (nextQuantity > product.stock) {
@@ -49,7 +50,7 @@ async function addToCart(req, res, next) {
       });
     }
 
-    await Cart.upsertCartItem(cart.id, productId, nextQuantity, product.price);
+    await Cart.upsertCartItem(cart.id, productId, size, nextQuantity, product.price);
     const cartData = await Cart.getCartItems(req.user.id);
     return res.status(201).json({
       success: true,
@@ -68,6 +69,7 @@ async function updateCartItem(req, res, next) {
   try {
     const productId = Number(req.params.productId);
     const quantity = Number(req.body.quantity);
+    const size = String(req.body.size || '').trim();
     const product = await Product.findById(productId);
     if (!product || !product.is_active) {
       return res.status(404).json({
@@ -83,7 +85,7 @@ async function updateCartItem(req, res, next) {
     }
 
     const cart = await Cart.getOrCreateCart(req.user.id);
-    await Cart.upsertCartItem(cart.id, productId, quantity, product.price);
+    await Cart.upsertCartItem(cart.id, productId, size, quantity, product.price);
     const cartData = await Cart.getCartItems(req.user.id);
     return res.json({
       success: true,
@@ -101,8 +103,9 @@ async function updateCartItem(req, res, next) {
 async function removeCartItem(req, res, next) {
   try {
     const productId = Number(req.params.productId);
+    const size = String(req.query.size || req.body?.size || '').trim();
     const cart = await Cart.getOrCreateCart(req.user.id);
-    await Cart.removeCartItem(cart.id, productId);
+    await Cart.removeCartItem(cart.id, productId, size);
     const cartData = await Cart.getCartItems(req.user.id);
     return res.json({
       success: true,

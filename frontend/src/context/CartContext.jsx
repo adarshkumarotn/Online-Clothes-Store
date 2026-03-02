@@ -1,6 +1,6 @@
 // React context: shared state/actions provider for CartContext.
 
-import { createContext, useContext, useEffect, useState } from 'react';
+import { createContext, useContext, useEffect, useRef, useState } from 'react';
 import api from '../api/client';
 
 const CartContext = createContext(null);
@@ -81,6 +81,8 @@ function clearGuestCartStorage() {
 }
 
 export function CartProvider({ children }) {
+  const syncGuestCartPromiseRef = useRef(null);
+  const pendingAddKeysRef = useRef(new Set());
   const [cart, setCart] = useState(() => {
     if (typeof window === 'undefined') return EMPTY_CART;
     return localStorage.getItem('customerToken') ? EMPTY_CART : readGuestCart();
@@ -88,28 +90,173 @@ export function CartProvider({ children }) {
   const [loading, setLoading] = useState(false);
 
   const syncGuestCartToServer = async () => {
-    const guestCart = readGuestCart();
-    if (!guestCart.items.length) return;
+    if (syncGuestCartPromiseRef.current) {
+      return syncGuestCartPromiseRef.current;
+    }
 
-    // Clear local guest cart first so duplicate refresh calls do not sync same items again.
-    clearGuestCartStorage();
-    const failedItems = [];
+    syncGuestCartPromiseRef.current = (async () => {
+      const guestCart = readGuestCart();
+      if (!guestCart.items.length) return;
 
-    for (const item of guestCart.items) {
-      try {
-        await api.post('/cart/items', {
-          productId: item.product_id,
-          quantity: item.quantity
-        });
-      } catch {
-        failedItems.push(item);
+      // Clear local guest cart first so duplicate refresh calls do not sync same items again.
+      clearGuestCartStorage();
+      const failedItems = [];
+
+      for (const item of guestCart.items) {
+        try {
+          await api.post('/cart/items', {
+            productId: item.product_id,
+            quantity: item.quantity,
+            size: normalizeSize(item.size)
+          });
+        } catch {
+          failedItems.push(item);
+        }
       }
+
+      // Restore only items that failed to sync, so user does not lose them.
+      if (failedItems.length) {
+        saveGuestCart(buildGuestCart(failedItems));
+      }
+    })();
+
+    try {
+      await syncGuestCartPromiseRef.current;
+    } finally {
+      syncGuestCartPromiseRef.current = null;
+    }
+  };
+
+  const addToCart = async (productId, quantity = 1, productData = null, selectedSize = '') => {
+    const safeProductId = Number(productId);
+    const safeQuantity = toPositiveInt(quantity, 1);
+    const normalizedSize = normalizeSize(selectedSize);
+    const addKey = `${safeProductId}-${normalizedSize || 'default'}`;
+
+    if (pendingAddKeysRef.current.has(addKey)) {
+      return;
+    }
+    pendingAddKeysRef.current.add(addKey);
+
+    try {
+      if (localStorage.getItem('customerToken')) {
+        await api.post('/cart/items', {
+          productId: safeProductId,
+          quantity: safeQuantity,
+          size: normalizedSize
+        });
+        await refreshCart();
+        return;
+      }
+
+      const nextCart = readGuestCart();
+      const existingIndex = nextCart.items.findIndex(
+        (item) => item.product_id === safeProductId && normalizeSize(item.size) === normalizedSize
+      );
+
+      let resolvedProduct = productData;
+      if (!resolvedProduct && existingIndex === -1) {
+        try {
+          const { data } = await api.get(`/products/${safeProductId}`);
+          resolvedProduct = data.data;
+        } catch {
+          resolvedProduct = null;
+        }
+      }
+
+      if (existingIndex >= 0) {
+        const existingItem = nextCart.items[existingIndex];
+        const stockLimit = toPositiveInt(
+          resolvedProduct?.stock ?? existingItem.stock ?? UNKNOWN_STOCK,
+          UNKNOWN_STOCK
+        );
+        const nextQuantityValue = Math.min(existingItem.quantity + safeQuantity, stockLimit);
+        nextCart.items[existingIndex] = normalizeGuestItem({
+          ...existingItem,
+          name: resolvedProduct?.name ?? existingItem.name,
+          category_name: resolvedProduct?.category_name ?? existingItem.category_name,
+          unit_price: resolvedProduct?.price ?? existingItem.unit_price,
+          stock: stockLimit,
+          image_url: resolvedProduct?.image_url ?? existingItem.image_url,
+          size: normalizedSize || existingItem.size,
+          quantity: nextQuantityValue
+        });
+      } else {
+        const stockLimit = toPositiveInt(resolvedProduct?.stock, UNKNOWN_STOCK);
+        nextCart.items.push(
+          normalizeGuestItem({
+            product_id: safeProductId,
+            name: resolvedProduct?.name ?? 'Product',
+            category_name: resolvedProduct?.category_name ?? '',
+            unit_price: resolvedProduct?.price ?? 0,
+            stock: stockLimit,
+            quantity: Math.min(safeQuantity, stockLimit),
+            image_url: resolvedProduct?.image_url ?? '/placeholder.svg',
+            size: normalizedSize
+          })
+        );
+      }
+
+      const normalized = buildGuestCart(nextCart.items);
+      saveGuestCart(normalized);
+      setCart(normalized);
+    } finally {
+      pendingAddKeysRef.current.delete(addKey);
+    }
+  };
+
+  const updateQuantity = async (productId, quantity, selectedSize = '') => {
+    const safeProductId = Number(productId);
+    const safeQuantity = toPositiveInt(quantity, 1);
+    const normalizedSize = normalizeSize(selectedSize);
+
+    if (localStorage.getItem('customerToken')) {
+      await api.put(`/cart/items/${safeProductId}`, {
+        quantity: safeQuantity,
+        size: normalizedSize
+      });
+      await refreshCart();
+      return;
     }
 
-    // Restore only items that failed to sync, so user does not lose them.
-    if (failedItems.length) {
-      saveGuestCart(buildGuestCart(failedItems));
+    const current = readGuestCart();
+    const updatedItems = current.items.map((item) => {
+      if (item.product_id !== safeProductId || normalizeSize(item.size) !== normalizedSize) {
+        return item;
+      }
+      return {
+        ...item,
+        quantity: Math.min(safeQuantity, toPositiveInt(item.stock, UNKNOWN_STOCK))
+      };
+    });
+
+    const normalized = buildGuestCart(updatedItems);
+    saveGuestCart(normalized);
+    setCart(normalized);
+  };
+
+  const removeItem = async (productId, selectedSize = '') => {
+    const safeProductId = Number(productId);
+    const normalizedSize = normalizeSize(selectedSize);
+
+    if (localStorage.getItem('customerToken')) {
+      await api.delete(`/cart/items/${safeProductId}`, {
+        params: {
+          size: normalizedSize || undefined
+        }
+      });
+      await refreshCart();
+      return;
     }
+
+    const current = readGuestCart();
+    const normalized = buildGuestCart(
+      current.items.filter(
+        (item) => item.product_id !== safeProductId || normalizeSize(item.size) !== normalizedSize
+      )
+    );
+    saveGuestCart(normalized);
+    setCart(normalized);
   };
 
   const refreshCart = async () => {
@@ -133,125 +280,6 @@ export function CartProvider({ children }) {
   useEffect(() => {
     refreshCart();
   }, []);
-
-  const addToCart = async (productId, quantity = 1, productData = null, selectedSize = '') => {
-    const safeProductId = Number(productId);
-    const safeQuantity = toPositiveInt(quantity, 1);
-    const normalizedSize = normalizeSize(selectedSize);
-
-    if (localStorage.getItem('customerToken')) {
-      await api.post('/cart/items', {
-        productId: safeProductId,
-        quantity: safeQuantity
-      });
-      await refreshCart();
-      return;
-    }
-
-    const nextCart = readGuestCart();
-    const existingIndex = nextCart.items.findIndex(
-      (item) => item.product_id === safeProductId && normalizeSize(item.size) === normalizedSize
-    );
-
-    let resolvedProduct = productData;
-    if (!resolvedProduct && existingIndex === -1) {
-      try {
-        const { data } = await api.get(`/products/${safeProductId}`);
-        resolvedProduct = data.data;
-      } catch {
-        resolvedProduct = null;
-      }
-    }
-
-    if (existingIndex >= 0) {
-      const existingItem = nextCart.items[existingIndex];
-      const stockLimit = toPositiveInt(
-        resolvedProduct?.stock ?? existingItem.stock ?? UNKNOWN_STOCK,
-        UNKNOWN_STOCK
-      );
-      const nextQuantityValue = Math.min(existingItem.quantity + safeQuantity, stockLimit);
-      nextCart.items[existingIndex] = normalizeGuestItem({
-        ...existingItem,
-        name: resolvedProduct?.name ?? existingItem.name,
-        category_name: resolvedProduct?.category_name ?? existingItem.category_name,
-        unit_price: resolvedProduct?.price ?? existingItem.unit_price,
-        stock: stockLimit,
-        image_url: resolvedProduct?.image_url ?? existingItem.image_url,
-        size: normalizedSize || existingItem.size,
-        quantity: nextQuantityValue
-      });
-    } else {
-      const stockLimit = toPositiveInt(resolvedProduct?.stock, UNKNOWN_STOCK);
-      nextCart.items.push(
-        normalizeGuestItem({
-          product_id: safeProductId,
-          name: resolvedProduct?.name ?? 'Product',
-          category_name: resolvedProduct?.category_name ?? '',
-          unit_price: resolvedProduct?.price ?? 0,
-          stock: stockLimit,
-          quantity: Math.min(safeQuantity, stockLimit),
-          image_url: resolvedProduct?.image_url ?? '/placeholder.svg',
-          size: normalizedSize
-        })
-      );
-    }
-
-    const normalized = buildGuestCart(nextCart.items);
-    saveGuestCart(normalized);
-    setCart(normalized);
-  };
-
-  const updateQuantity = async (productId, quantity, selectedSize = '') => {
-    const safeProductId = Number(productId);
-    const safeQuantity = toPositiveInt(quantity, 1);
-    const normalizedSize = normalizeSize(selectedSize);
-
-    if (localStorage.getItem('customerToken')) {
-      await api.put(`/cart/items/${safeProductId}`, { quantity: safeQuantity });
-      await refreshCart();
-      return;
-    }
-
-    const current = readGuestCart();
-    const updatedItems = current.items.map((item) => {
-      if (
-        item.product_id !== safeProductId ||
-        normalizeSize(item.size) !== normalizedSize
-      ) {
-        return item;
-      }
-      return {
-        ...item,
-        quantity: Math.min(safeQuantity, toPositiveInt(item.stock, UNKNOWN_STOCK))
-      };
-    });
-
-    const normalized = buildGuestCart(updatedItems);
-    saveGuestCart(normalized);
-    setCart(normalized);
-  };
-
-  const removeItem = async (productId, selectedSize = '') => {
-    const safeProductId = Number(productId);
-    const normalizedSize = normalizeSize(selectedSize);
-
-    if (localStorage.getItem('customerToken')) {
-      await api.delete(`/cart/items/${safeProductId}`);
-      await refreshCart();
-      return;
-    }
-
-    const current = readGuestCart();
-    const normalized = buildGuestCart(
-      current.items.filter(
-        (item) =>
-          item.product_id !== safeProductId ||
-          normalizeSize(item.size) !== normalizedSize
-      )
-    );
-    saveGuestCart(normalized);
-    setCart(normalized);
-  };
 
   const clearCart = async () => {
     if (localStorage.getItem('customerToken')) {

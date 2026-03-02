@@ -72,10 +72,11 @@ CREATE TABLE cart_items (
   id INT AUTO_INCREMENT PRIMARY KEY,
   cart_id INT NOT NULL,
   product_id INT NOT NULL,
+  size VARCHAR(50) NOT NULL DEFAULT '',
   quantity INT NOT NULL,
   unit_price DECIMAL(10, 2) NOT NULL,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  UNIQUE KEY uniq_cart_product (cart_id, product_id),
+  UNIQUE KEY uniq_cart_product_size (cart_id, product_id, size),
   FOREIGN KEY (cart_id) REFERENCES carts(id) ON DELETE CASCADE,
   FOREIGN KEY (product_id) REFERENCES products(id)
 );
