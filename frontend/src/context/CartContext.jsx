@@ -45,6 +45,10 @@ function normalizeGuestItem(item) {
   };
 }
 
+function getCartItemKey(item) {
+  return `${Number(item.product_id ?? item.productId)}::${normalizeSize(item.size)}`;
+}
+
 function buildGuestCart(items = []) {
   const normalizedItems = items.map(normalizeGuestItem).filter(Boolean);
   const total = normalizedItems.reduce(
@@ -98,16 +102,38 @@ export function CartProvider({ children }) {
       const guestCart = readGuestCart();
       if (!guestCart.items.length) return;
 
+      const { data } = await api.get('/cart');
+      const serverItems = Array.isArray(data?.data?.items) ? data.data.items : [];
+      const serverItemMap = new Map(serverItems.map((item) => [getCartItemKey(item), item]));
+
       // Clear local guest cart first so duplicate refresh calls do not sync same items again.
       clearGuestCartStorage();
       const failedItems = [];
 
       for (const item of guestCart.items) {
+        const normalizedSize = normalizeSize(item.size);
+        const existingServerItem = serverItemMap.get(getCartItemKey(item));
+
         try {
+          if (existingServerItem) {
+            const nextQuantity = Math.min(
+              Math.max(Number(existingServerItem.quantity), Number(item.quantity)),
+              toPositiveInt(item.stock, UNKNOWN_STOCK)
+            );
+
+            if (nextQuantity !== Number(existingServerItem.quantity)) {
+              await api.put(`/cart/items/${item.product_id}`, {
+                quantity: nextQuantity,
+                size: normalizedSize
+              });
+            }
+            continue;
+          }
+
           await api.post('/cart/items', {
             productId: item.product_id,
             quantity: item.quantity,
-            size: normalizeSize(item.size)
+            size: normalizedSize
           });
         } catch {
           failedItems.push(item);
@@ -124,6 +150,26 @@ export function CartProvider({ children }) {
       await syncGuestCartPromiseRef.current;
     } finally {
       syncGuestCartPromiseRef.current = null;
+    }
+  };
+
+  const refreshCart = async ({ syncGuest = true } = {}) => {
+    if (!localStorage.getItem('customerToken')) {
+      setCart(readGuestCart());
+      return;
+    }
+
+    setLoading(true);
+    try {
+      if (syncGuest) {
+        await syncGuestCartToServer();
+      }
+      const { data } = await api.get('/cart');
+      setCart(data.data);
+    } catch {
+      setCart(EMPTY_CART);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -145,7 +191,7 @@ export function CartProvider({ children }) {
           quantity: safeQuantity,
           size: normalizedSize
         });
-        await refreshCart();
+        await refreshCart({ syncGuest: false });
         return;
       }
 
@@ -215,7 +261,7 @@ export function CartProvider({ children }) {
         quantity: safeQuantity,
         size: normalizedSize
       });
-      await refreshCart();
+      await refreshCart({ syncGuest: false });
       return;
     }
 
@@ -245,7 +291,7 @@ export function CartProvider({ children }) {
           size: normalizedSize || undefined
         }
       });
-      await refreshCart();
+      await refreshCart({ syncGuest: false });
       return;
     }
 
@@ -259,32 +305,15 @@ export function CartProvider({ children }) {
     setCart(normalized);
   };
 
-  const refreshCart = async () => {
-    if (!localStorage.getItem('customerToken')) {
-      setCart(readGuestCart());
-      return;
-    }
-
-    setLoading(true);
-    try {
-      await syncGuestCartToServer();
-      const { data } = await api.get('/cart');
-      setCart(data.data);
-    } catch {
-      setCart(EMPTY_CART);
-    } finally {
-      setLoading(false);
-    }
-  };
-
   useEffect(() => {
     refreshCart();
   }, []);
 
   const clearCart = async () => {
     if (localStorage.getItem('customerToken')) {
+      clearGuestCartStorage();
       await api.delete('/cart/clear');
-      await refreshCart();
+      await refreshCart({ syncGuest: false });
       return;
     }
 
