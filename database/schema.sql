@@ -154,14 +154,4 @@ VALUES (
   'Admin@123'
 );
 
-INSERT IGNORE INTO categories (name, description) VALUES
-  ('Men', 'Mens fashion and daily wear'),
-  ('Women', 'Womens fashion collection'),
-  ('Kids', 'Kids clothing and accessories');
-
-INSERT IGNORE INTO products (category_id, name, description, price, stock, image_url) VALUES
-  (1, 'Classic Denim Jacket', 'Regular fit denim jacket for men.', 1999.00, 25, '/placeholder.svg'),
-  (2, 'Floral Summer Dress', 'Lightweight floral dress for women.', 1499.00, 30, '/placeholder.svg'),
-  (3, 'Kids Cotton Hoodie', 'Soft hoodie for kids.', 999.00, 40, '/placeholder.svg');
-
 
