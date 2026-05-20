@@ -3,7 +3,7 @@
 A full-stack local e-commerce application built with:
 
 - Frontend: HTML + CSS + JavaScript + React + Vite
-- Backend: Node.js + Express
+- Backend: Node.js + Express.js
 - Database: MySQL
 
 ## Project Structure
